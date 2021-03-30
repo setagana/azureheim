@@ -19,6 +19,12 @@ resource "azurerm_storage_share" "ss" {
   quota                = 10
 }
 
+resource "azurerm_storage_share" "ss-server" {
+  name                 = "azureheim-server-${var.name_suffix}"
+  storage_account_name = azurerm_storage_account.sa.name
+  quota                = 10
+}
+
 resource "azurerm_storage_share_directory" "sdir" {
   name                 = "worlds"
   share_name           = azurerm_storage_share.ss.name
@@ -46,25 +52,26 @@ resource "azurerm_storage_share_file" "fwlfile" {
   path             = "worlds"
 }
 
+resource "azurerm_public_ip" "azureheim" {
+  name                = "pubip-azureheim-${var.name_suffix}"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+  allocation_method   = "Static"
+  sku                 = "Standard"
+}
+
 resource "azurerm_virtual_network" "vnet" {
-  name                = "vnet-azureheim-${var.name_suffix}"
+  name                = "vnet-${var.name_suffix}"
   location            = azurerm_resource_group.rg.location
   resource_group_name = azurerm_resource_group.rg.name
   address_space       = ["10.0.0.0/21"]
-}
-
-resource "azurerm_subnet" "public_subnet" {
-  name                 = "pubsnet-azureheim-${var.name_suffix}"
-  resource_group_name  = azurerm_resource_group.rg.name
-  virtual_network_name = azurerm_virtual_network.vnet.name
-  address_prefixes     = ["10.0.1.0/24"]
 }
 
 resource "azurerm_subnet" "private_subnet" {
   name                 = "privatesnet-azureheim-${var.name_suffix}"
   resource_group_name  = azurerm_resource_group.rg.name
   virtual_network_name = azurerm_virtual_network.vnet.name
-  address_prefixes     = ["10.0.2.0/24"]
+  address_prefixes     = ["10.0.2.0/28"]
 
   delegation {
     name = "delegation"
@@ -74,13 +81,6 @@ resource "azurerm_subnet" "private_subnet" {
       actions = ["Microsoft.Network/virtualNetworks/subnets/action"]
     }
   }
-}
-
-resource "azurerm_public_ip" "azureheim" {
-  name                = "pubip-azureheim-${var.name_suffix}"
-  resource_group_name = azurerm_resource_group.rg.name
-  location            = azurerm_resource_group.rg.location
-  allocation_method   = "Dynamic"
 }
 
 resource "azurerm_network_profile" "nprofile" {
@@ -145,125 +145,59 @@ resource "azurerm_container_group" "valheim" {
       storage_account_key  = azurerm_storage_account.sa.primary_access_key
       share_name           = azurerm_storage_share.ss.name
     }
+
+    volume {
+      name                 = "azureheim-server-data"
+      mount_path           = "/opt/valheim"
+      storage_account_name = azurerm_storage_account.sa.name
+      storage_account_key  = azurerm_storage_account.sa.primary_access_key
+      share_name           = azurerm_storage_share.ss-server.name
+    }
   }
 }
 
-locals {
-  backend_address_pool_name      = "${azurerm_virtual_network.vnet.name}-beap"
-  frontend_port_name             = "${azurerm_virtual_network.vnet.name}-feport"
-  frontend_ip_configuration_name = "${azurerm_virtual_network.vnet.name}-feip"
-  http_setting_name              = "${azurerm_virtual_network.vnet.name}-be-htst"
-  listener_name                  = "${azurerm_virtual_network.vnet.name}-httplstn"
-  request_routing_rule_name      = "${azurerm_virtual_network.vnet.name}-rqrt"
-  redirect_configuration_name    = "${azurerm_virtual_network.vnet.name}-rdrcfg"
-}
-
-resource "azurerm_application_gateway" "ag" {
-  name                = "azureheim-${var.name_suffix}"
-  resource_group_name = azurerm_resource_group.rg.name
+resource "azurerm_lb" "lb" {
+  name                = "loadbalancer-${var.name_suffix}"
   location            = azurerm_resource_group.rg.location
-
-  sku {
-    name     = "Standard_Small"
-    tier     = "Standard"
-    capacity = 2
-  }
-
-  gateway_ip_configuration {
-    name      = "azheim-gateway-ip-config-${var.name_suffix}"
-    subnet_id = azurerm_subnet.public_subnet.id
-  }
-
-  frontend_port {
-    name = "${local.frontend_port_name}-2456"
-    port = 2456
-  }
-
-  frontend_port {
-    name = "${local.frontend_port_name}-2457"
-    port = 2457
-  }
-
-  frontend_port {
-    name = "${local.frontend_port_name}-2458"
-    port = 2458
-  }
+  resource_group_name = azurerm_resource_group.rg.name
+  sku                 = "Standard"
 
   frontend_ip_configuration {
-    name                 = local.frontend_ip_configuration_name
+    name                 = "LBPublicIPAddress"
     public_ip_address_id = azurerm_public_ip.azureheim.id
   }
+}
 
-  backend_address_pool {
-    name = local.backend_address_pool_name
-  }
+resource "azurerm_lb_backend_address_pool" "add_pool" {
+  name            = "address-pool-${var.name_suffix}"
+  loadbalancer_id = azurerm_lb.lb.id
+}
 
-  backend_http_settings {
-    name                  = "${local.http_setting_name}-2456"
-    cookie_based_affinity = "Disabled"
-    port                  = 2456
-    protocol              = "Http"
-    request_timeout       = 60
-  }
+resource "azurerm_lb_backend_address_pool_address" "pool_address" {
+  name                    = "pool-address-${var.name_suffix}"
+  backend_address_pool_id = azurerm_lb_backend_address_pool.add_pool.id
+  virtual_network_id      = azurerm_virtual_network.vnet.id
+  ip_address              = azurerm_container_group.valheim.ip_address
+}
 
-  backend_http_settings {
-    name                  = "${local.http_setting_name}-2457"
-    cookie_based_affinity = "Disabled"
-    port                  = 2457
-    protocol              = "Http"
-    request_timeout       = 60
-  }
+resource "azurerm_lb_rule" "lb-rule-2456" {
+  resource_group_name            = azurerm_resource_group.rg.name
+  loadbalancer_id                = azurerm_lb.lb.id
+  name                           = "LBRule2456"
+  protocol                       = "Udp"
+  frontend_port                  = 2456
+  backend_port                   = 2456
+  backend_address_pool_id        = azurerm_lb_backend_address_pool.add_pool.id
+  frontend_ip_configuration_name = "LBPublicIPAddress"
+}
 
-  backend_http_settings {
-    name                  = "${local.http_setting_name}-2458"
-    cookie_based_affinity = "Disabled"
-    port                  = 2458
-    protocol              = "Http"
-    request_timeout       = 60
-  }
-
-  http_listener {
-    name                           = "${local.listener_name}-2456"
-    frontend_ip_configuration_name = local.frontend_ip_configuration_name
-    frontend_port_name             = "${local.frontend_port_name}-2456"
-    protocol                       = "Http"
-  }
-
-  http_listener {
-    name                           = "${local.listener_name}-2457"
-    frontend_ip_configuration_name = local.frontend_ip_configuration_name
-    frontend_port_name             = "${local.frontend_port_name}-2457"
-    protocol                       = "Http"
-  }
-
-  http_listener {
-    name                           = "${local.listener_name}-2458"
-    frontend_ip_configuration_name = local.frontend_ip_configuration_name
-    frontend_port_name             = "${local.frontend_port_name}-2458"
-    protocol                       = "Http"
-  }
-
-  request_routing_rule {
-    name                       = "${local.request_routing_rule_name}-2456"
-    rule_type                  = "Basic"
-    http_listener_name         = "${local.listener_name}-2456"
-    backend_address_pool_name  = local.backend_address_pool_name
-    backend_http_settings_name = "${local.http_setting_name}-2456"
-  }
-
-  request_routing_rule {
-    name                       = "${local.request_routing_rule_name}-2457"
-    rule_type                  = "Basic"
-    http_listener_name         = "${local.listener_name}-2457"
-    backend_address_pool_name  = local.backend_address_pool_name
-    backend_http_settings_name = "${local.http_setting_name}-2457"
-  }
-
-  request_routing_rule {
-    name                       = "${local.request_routing_rule_name}-2458"
-    rule_type                  = "Basic"
-    http_listener_name         = "${local.listener_name}-2458"
-    backend_address_pool_name  = local.backend_address_pool_name
-    backend_http_settings_name = "${local.http_setting_name}-2458"
-  }
+resource "azurerm_lb_rule" "lb-rule-2457" {
+  resource_group_name            = azurerm_resource_group.rg.name
+  loadbalancer_id                = azurerm_lb.lb.id
+  name                           = "LBRule2457"
+  protocol                       = "Udp"
+  frontend_port                  = 2457
+  backend_port                   = 2457
+  backend_address_pool_id        = azurerm_lb_backend_address_pool.add_pool.id
+  frontend_ip_configuration_name = "LBPublicIPAddress"
 }
