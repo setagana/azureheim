@@ -36,6 +36,10 @@ resource "azurerm_storage_share_file" "dbfile" {
   storage_share_id = azurerm_storage_share.ss.id
   source           = "${var.valheim_world_name}.db"
   path             = "worlds"
+  count            = var.valheim_world_name != "" ? 1 : 0
+  depends_on = [
+    azurerm_storage_share_directory.sdir
+  ]
 }
 
 resource "azurerm_storage_share_file" "dboldfile" {
@@ -43,6 +47,10 @@ resource "azurerm_storage_share_file" "dboldfile" {
   storage_share_id = azurerm_storage_share.ss.id
   source           = "${var.valheim_world_name}.db.old"
   path             = "worlds"
+  count            = var.valheim_world_name != "" ? 1 : 0
+  depends_on = [
+    azurerm_storage_share_directory.sdir
+  ]
 }
 
 resource "azurerm_storage_share_file" "fwlfile" {
@@ -50,6 +58,10 @@ resource "azurerm_storage_share_file" "fwlfile" {
   storage_share_id = azurerm_storage_share.ss.id
   source           = "${var.valheim_world_name}.fwl"
   path             = "worlds"
+  count            = var.valheim_world_name != "" ? 1 : 0
+  depends_on = [
+    azurerm_storage_share_directory.sdir
+  ]
 }
 
 resource "azurerm_public_ip" "azureheim" {
@@ -71,7 +83,7 @@ resource "azurerm_subnet" "private_subnet" {
   name                 = "privatesnet-azureheim-${var.name_suffix}"
   resource_group_name  = azurerm_resource_group.rg.name
   virtual_network_name = azurerm_virtual_network.vnet.name
-  address_prefixes     = ["10.0.2.0/28"]
+  address_prefixes     = ["10.0.2.0/29"]
 
   delegation {
     name = "delegation"
@@ -96,6 +108,76 @@ resource "azurerm_network_profile" "nprofile" {
       subnet_id = azurerm_subnet.private_subnet.id
     }
   }
+}
+
+resource "azurerm_lb" "lb" {
+  name                = "loadbalancer-${var.name_suffix}"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  sku                 = "Standard"
+
+  frontend_ip_configuration {
+    name                 = "LBPublicIPAddress"
+    public_ip_address_id = azurerm_public_ip.azureheim.id
+  }
+}
+
+resource "azurerm_lb_probe" "example" {
+  resource_group_name = azurerm_resource_group.rg.name
+  loadbalancer_id     = azurerm_lb.lb.id
+  name                = "status-server-running"
+  port                = 80
+  protocol            = "Http"
+  request_path        = "/"
+  number_of_probes    = 20
+}
+
+resource "azurerm_lb_backend_address_pool" "add_pool" {
+  name            = "address-pool-${var.name_suffix}"
+  loadbalancer_id = azurerm_lb.lb.id
+}
+
+resource "azurerm_lb_backend_address_pool_address" "pool_address_4" {
+  name                    = "pool-address-4-${var.name_suffix}"
+  backend_address_pool_id = azurerm_lb_backend_address_pool.add_pool.id
+  virtual_network_id      = azurerm_virtual_network.vnet.id
+  ip_address              = "10.0.2.4"
+}
+
+resource "azurerm_lb_backend_address_pool_address" "pool_address_5" {
+  name                    = "pool-address-5-${var.name_suffix}"
+  backend_address_pool_id = azurerm_lb_backend_address_pool.add_pool.id
+  virtual_network_id      = azurerm_virtual_network.vnet.id
+  ip_address              = "10.0.2.5"
+}
+
+resource "azurerm_lb_backend_address_pool_address" "pool_address_6" {
+  name                    = "pool-address-6-${var.name_suffix}"
+  backend_address_pool_id = azurerm_lb_backend_address_pool.add_pool.id
+  virtual_network_id      = azurerm_virtual_network.vnet.id
+  ip_address              = "10.0.2.6"
+}
+
+resource "azurerm_lb_rule" "lb-rule-2456" {
+  resource_group_name            = azurerm_resource_group.rg.name
+  loadbalancer_id                = azurerm_lb.lb.id
+  name                           = "LBRule2456"
+  protocol                       = "Udp"
+  frontend_port                  = 2456
+  backend_port                   = 2456
+  backend_address_pool_id        = azurerm_lb_backend_address_pool.add_pool.id
+  frontend_ip_configuration_name = "LBPublicIPAddress"
+}
+
+resource "azurerm_lb_rule" "lb-rule-2457" {
+  resource_group_name            = azurerm_resource_group.rg.name
+  loadbalancer_id                = azurerm_lb.lb.id
+  name                           = "LBRule2457"
+  protocol                       = "Udp"
+  frontend_port                  = 2457
+  backend_port                   = 2457
+  backend_address_pool_id        = azurerm_lb_backend_address_pool.add_pool.id
+  frontend_ip_configuration_name = "LBPublicIPAddress"
 }
 
 resource "azurerm_container_group" "valheim" {
@@ -129,9 +211,10 @@ resource "azurerm_container_group" "valheim" {
     }
 
     environment_variables = {
-      "SERVER_NAME" = var.valheim_server_name
-      "WORLD_NAME"  = var.valheim_world_name
-      "STATUS_HTTP" = true
+      "SERVER_NAME"   = var.valheim_server_name
+      "WORLD_NAME"    = var.valheim_world_name
+      "STATUS_HTTP"   = true
+      "SERVER_PUBLIC" = true
     }
 
     secure_environment_variables = {
@@ -154,50 +237,11 @@ resource "azurerm_container_group" "valheim" {
       share_name           = azurerm_storage_share.ss-server.name
     }
   }
-}
 
-resource "azurerm_lb" "lb" {
-  name                = "loadbalancer-${var.name_suffix}"
-  location            = azurerm_resource_group.rg.location
-  resource_group_name = azurerm_resource_group.rg.name
-  sku                 = "Standard"
-
-  frontend_ip_configuration {
-    name                 = "LBPublicIPAddress"
-    public_ip_address_id = azurerm_public_ip.azureheim.id
-  }
-}
-
-resource "azurerm_lb_backend_address_pool" "add_pool" {
-  name            = "address-pool-${var.name_suffix}"
-  loadbalancer_id = azurerm_lb.lb.id
-}
-
-resource "azurerm_lb_backend_address_pool_address" "pool_address" {
-  name                    = "pool-address-${var.name_suffix}"
-  backend_address_pool_id = azurerm_lb_backend_address_pool.add_pool.id
-  virtual_network_id      = azurerm_virtual_network.vnet.id
-  ip_address              = azurerm_container_group.valheim.ip_address
-}
-
-resource "azurerm_lb_rule" "lb-rule-2456" {
-  resource_group_name            = azurerm_resource_group.rg.name
-  loadbalancer_id                = azurerm_lb.lb.id
-  name                           = "LBRule2456"
-  protocol                       = "Udp"
-  frontend_port                  = 2456
-  backend_port                   = 2456
-  backend_address_pool_id        = azurerm_lb_backend_address_pool.add_pool.id
-  frontend_ip_configuration_name = "LBPublicIPAddress"
-}
-
-resource "azurerm_lb_rule" "lb-rule-2457" {
-  resource_group_name            = azurerm_resource_group.rg.name
-  loadbalancer_id                = azurerm_lb.lb.id
-  name                           = "LBRule2457"
-  protocol                       = "Udp"
-  frontend_port                  = 2457
-  backend_port                   = 2457
-  backend_address_pool_id        = azurerm_lb_backend_address_pool.add_pool.id
-  frontend_ip_configuration_name = "LBPublicIPAddress"
+  depends_on = [
+    azurerm_storage_share_file.fwlfile,
+    azurerm_storage_share_file.dbfile,
+    azurerm_storage_share_file.dboldfile,
+    azurerm_lb.lb
+  ]
 }
