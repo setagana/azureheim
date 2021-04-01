@@ -1,4 +1,4 @@
-# This suffix will be added to your Azure resources, making them easy to identify together
+# This suffix will be added to the names of your Azure resources, making them easy to find together
 name_suffix = ""
 
 # Choose an Azure datacenter location near you and your players
@@ -18,6 +18,5 @@ server_memory = 4
 # If you choose to use the copy-world-data.ps1 script, this value will be set for you
 valheim_world_name = ""
 
-# Think of something memorable for you and your players, you can use this to find the
-# server in the directory of all Community servers
+# Think of something memorable for you and your players
 valheim_server_name = ""
